@@ -2,71 +2,131 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## What This Repository Is
 
-This is a **Claude Code plugin** - a collection of production-ready agents, skills, hooks, commands, rules, and MCP configurations. The project provides battle-tested workflows for software development using Claude Code.
+**Everything Claude Code (ECC)** (`ecc-universal` on npm) is a production-ready AI coding plugin that ships agents, skills, hooks, commands, and rules for use across Claude Code, Cursor, Codex, OpenCode, and Gemini harnesses. It is not an application — it is configuration and behavior that gets installed into AI coding tools.
 
-## Running Tests
+## Commands
 
 ```bash
+# Install dependencies
+npm install
+
 # Run all tests
 node tests/run-all.js
 
-# Run individual test files
+# Run an individual test file
 node tests/lib/utils.test.js
-node tests/lib/package-manager.test.js
-node tests/hooks/hooks.test.js
+
+# Lint all Markdown files
+npx markdownlint-cli '**/*.md' --ignore node_modules
+
+# Run ESLint
+npx eslint .
+
+# Doctor / health check
+node scripts/doctor.js
+
+# List installed components
+node scripts/list-installed.js
+
+# Validate curated skills
+node scripts/ci/validate-skills.js
 ```
 
 ## Architecture
 
-The project is organized into several core components:
+### Component Types and Formats
 
-- **agents/** - Specialized subagents for delegation (planner, code-reviewer, tdd-guide, etc.)
-- **skills/** - Workflow definitions and domain knowledge (coding standards, patterns, testing)
-- **commands/** - Slash commands invoked by users (/tdd, /plan, /e2e, etc.)
-- **hooks/** - Trigger-based automations (session persistence, pre/post-tool hooks)
-- **rules/** - Always-follow guidelines (security, coding style, testing requirements)
-- **mcp-configs/** - MCP server configurations for external integrations
-- **scripts/** - Cross-platform Node.js utilities for hooks and setup
-- **tests/** - Test suite for scripts and utilities
+| Directory | Format | Purpose |
+|-----------|--------|---------|
+| `agents/*.md` | YAML frontmatter (`name`, `description`, `tools`, `model`) + body | Specialized subagents for task delegation |
+| `skills/<name>/SKILL.md` | YAML frontmatter (`name`, `description`, `origin`) + body | Workflow/domain knowledge modules |
+| `commands/*.md` | YAML frontmatter with `description:` + body | Slash commands (e.g. `/tdd`, `/plan`, `/e2e`) |
+| `hooks/hooks.json` | JSON matcher array | Trigger-based automations |
+| `rules/<lang>/` | Markdown per concern | Always-applied coding guidelines |
+| `mcp-configs/` | JSON server configs | MCP server integrations |
+| `scripts/` | CommonJS Node.js utilities | Hook execution, install, session management |
+| `tests/` | `*.test.js` mirroring `scripts/` | Tests for scripts and utilities |
 
-## Key Commands
+### How Components Interact
 
-- `/tdd` - Test-driven development workflow
-- `/plan` - Implementation planning
-- `/e2e` - Generate and run E2E tests
-- `/code-review` - Quality review
-- `/build-fix` - Fix build errors
-- `/learn` - Extract patterns from sessions
-- `/skill-create` - Generate skills from git history
+- **Hooks** fire on Claude Code lifecycle events (PreToolUse, PostToolUse, etc.) and invoke scripts in `scripts/hooks/`. All hook scripts must route through `scripts/hooks/run-with-flags.js` so `ECC_HOOK_PROFILE` and `ECC_DISABLED_HOOKS` gating works.
+- **Agents** are invoked by Claude (or other agents) via subagent delegation. Proactive invocation rules are in `AGENTS.md`.
+- **Skills** are loaded by Claude Code based on context. Curated skills live in `skills/` and are referenced by `manifests/install-modules.json`; generated/imported skills live under `~/.claude/skills/` and are never committed.
+- **Rules** in `rules/common/` apply to all languages; language-specific rules live in `rules/<lang>/`.
+- **Commands** are slash commands available in chat (e.g. `/tdd`, `/learn`, `/skill-create`).
 
-## Development Notes
+### Multi-Harness Config Directories
 
-- Package manager detection: npm, pnpm, yarn, bun (configurable via `CLAUDE_PACKAGE_MANAGER` env var or project config)
-- Cross-platform: Windows, macOS, Linux support via Node.js scripts
-- Agent format: Markdown with YAML frontmatter (name, description, tools, model)
-- Skill format: Markdown with clear sections for when to use, how it works, examples
-- Skill placement: Curated in skills/; generated/imported under ~/.claude/skills/. See docs/SKILL-PLACEMENT-POLICY.md
-- Hook format: JSON with matcher conditions and command/notification hooks
+The repo ships configuration for multiple harnesses in parallel:
+- `.claude/` — Claude Code
+- `.cursor/` — Cursor IDE (rules under `.cursor/rules/`, hooks under `.cursor/hooks/`)
+- `.codex/` / `.codex-plugin/` — OpenAI Codex
+- `.gemini/` — Google Gemini
+- `.kiro/` — Kiro
+- `.agents/` — Cross-harness agent registry
 
-## Contributing
+### scripts/lib Infrastructure
 
-Follow the formats in CONTRIBUTING.md:
-- Agents: Markdown with frontmatter (name, description, tools, model)
-- Skills: Clear sections (When to Use, How It Works, Examples)
-- Commands: Markdown with description frontmatter
-- Hooks: JSON with matcher and hooks array
+Cross-platform Node.js utilities used by hooks and install:
+- `utils.js` — home dir detection, platform helpers, Claude config dir
+- `package-manager.js` — detect npm/pnpm/yarn/bun; override via `CLAUDE_PACKAGE_MANAGER` env var or project config
+- `session-manager.js` — session read/write (session data in `~/.claude/session-data/`)
+- `resolve-ecc-root.js` — resolves ECC install root from `CLAUDE_PLUGIN_ROOT` env or plugin cache scan
+- `install-state.js` — tracks installed components for incremental updates
 
-File naming: lowercase with hyphens (e.g., `python-reviewer.md`, `tdd-workflow.md`)
+### ECC 2.0 Alpha
 
-## Skills
+`ecc2/` is a Rust control-plane prototype. Build with `cargo build` inside `ecc2/`. Exposes `dashboard`, `start`, `sessions`, `status`, `stop`, `resume`, and `daemon` subcommands. Alpha only — not part of the main install flow.
 
-Use the following skills when working on related files:
+## Code Style
 
-| File(s) | Skill |
-|---------|-------|
-| `README.md` | `/readme` |
-| `.github/workflows/*.yml` | `/ci-workflow` |
+- **Runtime**: Node.js ≥18, CommonJS (`require`/`module.exports`). No ESM (`import`/`export`) unless the file ends in `.mjs`. No TypeScript.
+- **File naming**: lowercase with hyphens (`session-start.js`, `tdd-workflow.md`).
+- **Variables/symbols**: camelCase.
+- Prefer `const` over `let`; never `var`.
+- Keep hook scripts under 200 lines — extract helpers to `scripts/lib/`.
+- Hooks must exit `0` on non-critical errors. Blocking hooks (PreToolUse, stop) must stay fast (<200ms, no network calls).
+- Log to stderr with a `[HookName]` prefix.
 
-When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
+## Testing
+
+- Tests live in `tests/` mirroring the structure of `scripts/`.
+- New `scripts/lib/` files require a matching test in `tests/lib/`.
+- New hooks require at least one integration test in `tests/hooks/`.
+- Run `node tests/run-all.js` before committing.
+- Target 80%+ coverage.
+
+## Skill Placement Policy
+
+| Type | Location | Shipped |
+|------|----------|---------|
+| Curated | `skills/<name>/SKILL.md` (repo) | Yes |
+| Learned | `~/.claude/skills/learned/` | No |
+| Imported | `~/.claude/skills/imported/` | No |
+
+Only curated skills belong in the repo. Use `origin: ECC` in frontmatter for first-party skills and `origin: community` for contributed ones.
+
+## Commit Style
+
+Conventional commits with these prefixes: `feat`, `fix`, `docs`, `test`, `chore`.
+
+```
+feat(skills): add pytorch-patterns skill
+fix(hooks): repair session path on Windows
+docs: update contributing guide
+test(lib): add package-manager detection cases
+```
+
+## Agent Orchestration (from AGENTS.md)
+
+Use agents proactively without being asked:
+- Complex feature → **planner**
+- Code just written/modified → **code-reviewer**
+- Bug fix or new feature → **tdd-guide**
+- Architectural decision → **architect**
+- Security-sensitive code → **security-reviewer**
+- Autonomous loop execution → **loop-operator**
+
+Launch independent agents in parallel.
